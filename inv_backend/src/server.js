@@ -28,7 +28,7 @@ app.use('/api/suppliers', supplierRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 
 // Health check
-app.get('/api/health', (req, res) => {
+app.get('/', (req, res) => {
   res.json({ status: 'OK', message: 'Inventory Management API is running' });
 });
 
