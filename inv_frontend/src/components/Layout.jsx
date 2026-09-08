@@ -15,7 +15,6 @@ import '../css/Layout.css';
 const Layout = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-code 
   const handleLogout = () => {
     logout();
     navigate('/login');
