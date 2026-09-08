@@ -1,61 +1,163 @@
 """
-Simple Inventory Report Generator (Python utility)
-Connects to the same MongoDB and prints a summary report.
+Inventory Report API
+FastAPI + MongoDB
 """
 
 import os
-from dotenv import load_dotenv
-from pymongo import MongoClient
-from tabulate import tabulate
 from datetime import datetime
 
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../backend/.env'))
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from pymongo import MongoClient
 
-MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/inventory_db')
+load_dotenv()
 
-def main():
-    client = MongoClient(MONGODB_URI)
-    db = client.get_default_database() or client['inventory_db']
+MONGODB_URI = os.getenv(
+    "MONGODB_URI",
+    "mongodb://localhost:27017/inventory_db"
+)
 
-    products = list(db.products.find({'isActive': True}))
-    categories = {str(c['_id']): c['name'] for c in db.categories.find()}
+app = FastAPI(
+    title="Inventory Report API",
+    version="1.0.0"
+)
 
-    print("=" * 60)
-    print(f"  INVENTORY REPORT — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    print("=" * 60)
+client = MongoClient(
+    MONGODB_URI,
+    serverSelectionTimeoutMS=10000,
+    connectTimeoutMS=10000,
+)
 
-    total_items = len(products)
-    total_qty = sum(p.get('quantity', 0) for p in products)
-    total_value = sum(p.get('quantity', 0) * p.get('price', 0) for p in products)
-    low_stock = [p for p in products if p.get('quantity', 0) <= p.get('lowStockThreshold', 10)]
+db = client.get_default_database()
 
-    print(f"\nTotal Products     : {total_items}")
-    print(f"Total Stock Qty    : {total_qty}")
-    print(f"Inventory Value    : Rs {total_value:,.2f}")
-    print(f"Low Stock Items    : {len(low_stock)}")
+if db is None:
+    db = client["inventory_db"]
 
-    if products:
-        rows = []
-        for p in products:
-            cat = categories.get(str(p.get('category')), '-')
-            status = "LOW" if p.get('quantity', 0) <= p.get('lowStockThreshold', 10) else "OK"
-            rows.append([
-                p.get('sku', ''),
-                p.get('name', '')[:30],
-                cat,
-                p.get('quantity', 0),
-                f"Rs {p.get('price', 0)}",
-                status
-            ])
-        print("\n" + tabulate(rows, headers=['SKU', 'Name', 'Category', 'Qty', 'Price', 'Status'], tablefmt='grid'))
 
-    if low_stock:
-        print("\n⚠️  LOW STOCK ALERTS:")
-        for p in low_stock:
-            print(f"  - {p.get('name')} ({p.get('sku')}): {p.get('quantity')} left (threshold {p.get('lowStockThreshold')})")
+@app.get("/")
+def root():
+    return {
+        "success": True,
+        "message": "Inventory Report API is running"
+    }
 
-    print("\nDone.")
-    client.close()
 
-if __name__ == '__main__':
-    main()
+@app.get("/health")
+def health():
+    try:
+        client.admin.command("ping")
+
+        return {
+            "success": True,
+            "status": "healthy",
+            "database": "connected"
+        }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "status": "unhealthy",
+            "database": "disconnected",
+            "error": str(error)
+        }
+
+
+@app.get("/report")
+def generate_report():
+
+    try:
+        products = list(
+            db.products.find({
+                "isActive": True
+            })
+        )
+
+        categories = {
+            str(category["_id"]): category["name"]
+            for category in db.categories.find()
+        }
+
+        total_items = len(products)
+
+        total_qty = sum(
+            product.get("quantity", 0)
+            for product in products
+        )
+
+        total_value = sum(
+            product.get("quantity", 0)
+            * product.get("price", 0)
+            for product in products
+        )
+
+        low_stock = [
+            product
+            for product in products
+            if product.get("quantity", 0)
+            <= product.get("lowStockThreshold", 10)
+        ]
+
+        product_rows = []
+
+        for product in products:
+
+            category = categories.get(
+                str(product.get("category")),
+                "-"
+            )
+
+            quantity = product.get("quantity", 0)
+
+            threshold = product.get(
+                "lowStockThreshold",
+                10
+            )
+
+            status = (
+                "LOW"
+                if quantity <= threshold
+                else "OK"
+            )
+
+            product_rows.append({
+                "sku": product.get("sku", ""),
+                "name": product.get("name", ""),
+                "category": category,
+                "quantity": quantity,
+                "price": product.get("price", 0),
+                "status": status
+            })
+
+        return {
+            "success": True,
+            "generatedAt": datetime.now().isoformat(),
+
+            "summary": {
+                "totalProducts": total_items,
+                "totalStockQuantity": total_qty,
+                "inventoryValue": total_value,
+                "lowStockItems": len(low_stock)
+            },
+
+            "products": product_rows,
+
+            "lowStockAlerts": [
+                {
+                    "name": product.get("name", ""),
+                    "sku": product.get("sku", ""),
+                    "quantity": product.get("quantity", 0),
+                    "threshold": product.get(
+                        "lowStockThreshold",
+                        10
+                    )
+                }
+                for product in low_stock
+            ]
+        }
+
+    except Exception as error:
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(error)
+        )
